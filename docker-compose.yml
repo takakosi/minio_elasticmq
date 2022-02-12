@@ -1,0 +1,52 @@
+version: '3'
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # minio で設定しているクレデンシャル情報と同じ値
+      AWS_ACCESS_KEY_ID: hogehoge
+      AWS_SECRET_ACCESS_KEY: fugafuga
+    command: go run main.go
+    tty: true
+    volumes:
+      - ".:/app"
+    ports:
+      # 他のアプリケーションと衝突しないように適当なポートを設定
+      - "5000:80"
+    depends_on:
+      - "elasticmq"
+      - "minio"
+    networks:
+      - net1
+  minio:
+    image: minio/minio
+    environment:
+      # クレデンシャル情報
+      MINIO_ROOT_USER: hogehoge
+      MINIO_ROOT_PASSWORD: fugafuga
+    # コンテナの /data 以下にデータが格納される
+    command: ['server', '/data', '--console-address', ':9005']
+    volumes:
+      - "s3-data:/data"
+    ports:
+      # 他のアプリケーションと衝突しないように適当なポートを設定
+      - "9090:9000"
+      - "9005:9005"
+    networks:
+      - net1
+  elasticmq:
+    image: softwaremill/elasticmq
+    volumes:
+      # ElasticMQの設定ファイル
+      - ./elasticmq/conf/custom.conf://opt/elasticmq.conf:ro
+    ports:
+      - "9324:9324"
+      - "9325:9325"
+    networks:
+      - net1
+volumes:
+  s3-data:
+networks:
+  net1:
