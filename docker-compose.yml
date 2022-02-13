@@ -6,8 +6,8 @@ services:
       dockerfile: Dockerfile
     environment:
       # minio で設定しているクレデンシャル情報と同じ値
-      AWS_ACCESS_KEY_ID: hogehoge
-      AWS_SECRET_ACCESS_KEY: fugafuga
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
     command: go run main.go
     tty: true
     volumes:
@@ -24,12 +24,13 @@ services:
     image: minio/minio
     environment:
       # クレデンシャル情報
-      MINIO_ROOT_USER: hogehoge
-      MINIO_ROOT_PASSWORD: fugafuga
-    # コンテナの /data 以下にデータが格納される
-    command: ['server', '/data', '--console-address', ':9005']
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    entrypoint: sh
+    command: -c "mkdir -p /data/.minio.sys/buckets && cp -r /export/* /data/ && minio server /data --console-address :9005"
     volumes:
-      - "s3-data:/data"
+      - s3-data:/data
+      - ./minio/export:/export
     ports:
       # 他のアプリケーションと衝突しないように適当なポートを設定
       - "9090:9000"

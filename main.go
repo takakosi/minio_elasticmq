@@ -1,69 +1,50 @@
 package main
 
 import (
+	"fmt"
 	"log"
-	"net/http"
-	"time"
+	"sync"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/labstack/echo"
+	as "github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/takakosi/minio_elasticmq/s3"
+	"github.com/takakosi/minio_elasticmq/sqs"
 )
 
-// レスポンス用
-type Response struct {
-	Objects []ObjInfo `json:"objects"`
-}
-
-// レスポンス用
-type ObjInfo struct {
-	Key          string    `json:"key"`
-	LastModified time.Time `json:"lastModified"`
-	Size         int64     `json:"size"`
-}
-
 func main() {
+
+	// キューの接続
+	sqs.InitSQS()
+	s3.InitS3()
+
+	// バッチの本体処理
 	for {
-		if err := sqs.RetrieveMessage(); err != nil {
+
+		fmt.Println("batch start")
+		resp, err := sqs.RetrieveMessage()
+		if err != nil {
 			log.Fatal(err)
 		}
-	}
-}
 
-// 特定バケット配下のオブジェクト一覧
-func getObjects(c echo.Context) error {
-	sess := createSession()
-	svc := s3.New(sess)
-	bucket := c.QueryParam("bucket")
+		//　対象がなかった場合ループ
+		if resp == nil {
+			continue
+		}
 
-	// オブジェクト取得
-	res, err := svc.ListObjects(&s3.ListObjectsInput{
-		Bucket: aws.String(bucket),
-	})
-	// 本来はもっときちんとエラーハンドリングした方が良いが、簡単のため今回はこれで良しとする
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, err)
-	}
+		// メッセージの数だけgoroutineで並列処理
+		var wg sync.WaitGroup
+		for _, m := range resp.Messages {
+			wg.Add(1)
+			go func(msg *as.Message) {
+				defer wg.Done()
+				if err := s3.GetObjects(); err != nil {
+					fmt.Println(err)
+				}
+				if err := sqs.DeleteMessage(msg); err != nil {
+					fmt.Println(err)
+				}
+			}(m)
+		}
 
-	var objects []ObjInfo
-	// オブジェクト情報をJSONにつめて返す
-	for _, content := range res.Contents {
-		objects = append(
-			objects,
-			ObjInfo{Key: *content.Key, LastModified: *content.LastModified, Size: *content.Size},
-		)
+		wg.Wait()
 	}
-	return c.JSON(http.StatusOK, objects)
-}
-
-// セッションを返す
-func createSession() *session.Session {
-	// 特に設定しなくても環境変数にセットしたクレデンシャル情報を利用して接続してくれる
-	cfg := aws.Config{
-		Region:           aws.String("ap-northeast-1"),
-		Endpoint:         aws.String("http://minio:9000"), // コンテナ内からアクセスする場合はホストをサービス名で指定
-		S3ForcePathStyle: aws.Bool(true),                  // ローカルで動かす場合は必須
-	}
-	return session.Must(session.NewSession(&cfg))
 }

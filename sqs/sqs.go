@@ -1,96 +1,86 @@
-package main
+package sqs
 
 import (
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs"
+	la "github.com/takakosi/minio_elasticmq/aws"
 )
 
 const (
 	endpoint  = "http://elasticmq:9324"
-	region    = "ap-northeast-1"
 	queueName = "local.fifo"
 )
 
-func RetrieveMessage() error {
-	time.Sleep(3 * time.Second)
+var (
+	svc            *sqs.SQS
+	err            error
+	queueUrlOutput *sqs.GetQueueUrlOutput
+)
 
-	fmt.Println("batch job start")
-
-	client := getConnection()
-
-	output, err := client.GetQueueUrl(&sqs.GetQueueUrlInput{
-		QueueName: aws.String(queueName),
-	})
-	if err != nil {
-		// ローカルで起動が間に合わない場合があるのでループしとく
-		fmt.Println(err)
-		return nil
-	}
+func RetrieveMessage() (*sqs.ReceiveMessageOutput, error) {
 
 	params := &sqs.ReceiveMessageInput{
-		QueueUrl: output.QueueUrl,
+		QueueUrl: queueUrlOutput.QueueUrl,
 		// 一度に取得する最大メッセージ数。最大でも5まで。
 		MaxNumberOfMessages: aws.Int64(5),
-		// これでキューが空の場合はロングポーリング(20秒間繋ぎっぱなし)になる。
+		// ロングポーリング設定。20秒繋ぎっぱなし。
 		WaitTimeSeconds: aws.Int64(20),
 	}
 
-	resp, err := client.ReceiveMessage(params)
+	resp, err := svc.ReceiveMessage(params)
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if len(resp.Messages) == 0 {
 		fmt.Println("empty queue.")
-		return nil
+		return nil, nil
 	}
 
-	// メッセージの数だけgoroutineで並列処理
-	var wg sync.WaitGroup
-	for _, m := range resp.Messages {
-		wg.Add(1)
-		go func(msg *sqs.Message) {
-			defer wg.Done()
-			if err := DeleteMessage(msg, output, client); err != nil {
-				fmt.Println(err)
-			}
-		}(m)
-	}
-
-	wg.Wait()
-
-	return nil
+	return resp, nil
 }
 
-func getConnection() *sqs.SQS {
-	sess, err := session.NewSession()
-	if err != nil {
-		panic(err)
-	}
-	client := sqs.New(sess, &aws.Config{
+func getSQSConnection() {
+	sess := la.CreateSession()
+	svc = sqs.New(sess, &aws.Config{
 		Endpoint: aws.String(endpoint),
-		Region:   aws.String(region),
 	})
-	return client
 }
 
-func DeleteMessage(msg *sqs.Message, url *sqs.GetQueueUrlOutput, conn *sqs.SQS) error {
+func getQueueUrl() (*sqs.GetQueueUrlOutput, error) {
+	return svc.GetQueueUrl(&sqs.GetQueueUrlInput{
+		QueueName: aws.String(queueName),
+	})
+}
+
+func DeleteMessage(msg *sqs.Message) error {
 	fmt.Println("start DeleteMessage.")
-	time.Sleep(3 * time.Second)
 	params := &sqs.DeleteMessageInput{
-		QueueUrl:      url.QueueUrl,
+		QueueUrl:      queueUrlOutput.QueueUrl,
 		ReceiptHandle: aws.String(*msg.ReceiptHandle),
 	}
-	_, err := conn.DeleteMessage(params)
+	_, err := svc.DeleteMessage(params)
 
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func InitSQS() {
+	fmt.Println("Init start")
+	// SQS のコネクション取得
+	getSQSConnection()
+
+	// SQSキュー取得
+	// ローカルの起動が間に合わない場合に備え、ループ
+	for {
+		queueUrlOutput, err = getQueueUrl()
+		if err == nil {
+			break
+		}
+	}
 }
